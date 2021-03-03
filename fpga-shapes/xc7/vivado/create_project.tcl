@@ -36,6 +36,8 @@ set fs_design_obj [get_filesets sources_1]
 
 # Top design sources (not used in simulation)
 set top_sources [list \
+  [file normalize "${origin_dir}/xc7/top_anim.sv"] \
+  [file normalize "${origin_dir}/xc7/top_anim_db.sv"] \
   [file normalize "${origin_dir}/xc7/top_rectangles.sv"] \
   [file normalize "${origin_dir}/xc7/top_rectangles_fill.sv"] \
 ]

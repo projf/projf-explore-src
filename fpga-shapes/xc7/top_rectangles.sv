@@ -100,7 +100,7 @@ module top_rectangles (
                 rx1 <= 240 - shape_id;
                 ry1 <= 180 - shape_id;
                 /* verilator lint_on WIDTH */
-                fb_cidx_write <= shape_id + 1;  // skip first colour: black
+                fb_cidx_write <= shape_id + 1;  // skip 1st colour: black
             end
             DRAW: if (draw_done) begin
                 if (shape_id == SHAPE_CNT-1) begin

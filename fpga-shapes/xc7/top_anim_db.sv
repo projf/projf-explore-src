@@ -1,11 +1,11 @@
-// Project F: FPGA Shapes - Top Filled Rectangles (Arty with Pmod VGA)
+// Project F: FPGA Shapes - Top Double-Buffer Animation (Arty with Pmod VGA)
 // (C)2021 Will Green, open source hardware released under the MIT License
 // Learn more at https://projectf.io
 
 `default_nettype none
 `timescale 1ns / 1ps
 
-module top_rectangles_fill (
+module top_anim_db (
     input  wire logic clk_100m,     // 100 MHz clock
     input  wire logic btn_rst,      // reset button (active low)
     output      logic vga_hsync,    // horizontal sync
@@ -49,7 +49,7 @@ module top_rectangles_fill (
     logic vbi;
     always_comb vbi = (sy == V_RES && sx == 0);
 
-    // framebuffer (FB)
+    // framebuffers (FB)
     localparam FB_WIDTH   = 320;
     localparam FB_HEIGHT  = 240;
     localparam FB_CORDW   = $clog2(FB_WIDTH);  // assumes WIDTH>=HEIGHT
@@ -59,63 +59,141 @@ module top_rectangles_fill (
     localparam FB_IMAGE   = "";
     localparam FB_PALETTE = "16_colr_4bit_palette.mem";
 
-    logic fb_we;
-    logic [FB_ADDRW-1:0] fb_addr_write, fb_addr_read;
-    logic [FB_DATAW-1:0] fb_cidx_write;
-    logic [FB_DATAW-1:0] fb_cidx_read, fb_cidx_read_1;
+    // framebuffer multiplexing signals: drawing
+    logic fb_we, fb_we_draw, fb_we_clr;
+    logic [FB_ADDRW-1:0] fb_addr_write, fb_addr_draw, fb_addr_clr;
+    logic [FB_ADDRW-1:0] fb_addr_read;
+    logic [FB_DATAW-1:0] fb_cidx_write, fb_cidx_draw;
+    logic [FB_DATAW-1:0] fb_cidx_read;
+    // framebuffer multiplexing signals: display
+    logic [FB_ADDRW-1:0] fb_addr_disp;
+    logic [FB_DATAW-1:0] fb_cidx_disp;
+
+    // square coordinates
+    localparam Q1_SIZE = 80;
+    logic [FB_CORDW-1:0] q1x, q1y;  // position (top left)
+    logic q1dx, q1dy;               // direction: 0 is right/down
+    logic [FB_CORDW-1:0] q1s = 1;   // speed in pixels/frame
+    always_ff @(posedge clk_pix) begin
+        if (vbi) begin
+            if (q1x >= FB_WIDTH - (Q1_SIZE + q1s)) begin  // right edge
+                q1dx <= 1;
+                q1x <= q1x - q1s;
+            end else if (q1x < q1s) begin  // left edge
+                q1dx <= 0;
+                q1x <= q1x + q1s;
+            end else q1x <= (q1dx) ? q1x - q1s : q1x + q1s;
+
+            if (q1y >= FB_HEIGHT - (Q1_SIZE + q1s)) begin  // bottom edge
+                q1dy <= 1;
+                q1y <= q1y - q1s;
+            end else if (q1y < q1s) begin  // top edge
+                q1dy <= 0;
+                q1y <= q1y + q1s;
+            end else q1y <= (q1dy) ? q1y - q1s : q1y + q1s;
+        end
+    end
+
+    // draw shapes in framebuffer
+    logic [FB_CORDW-1:0] rx0, ry0, rx1, ry1;  // rectangle coords
+    logic [FB_CORDW-1:0] px, py;  // shape pixel drawing coordinates
+    logic draw_start, drawing, draw_done;  // draw_line signals
+
+    // draw state machine
+    enum {IDLE, INIT, CLEAR, DRAW, DONE} state;
+    initial state = IDLE;  // needed for Yosys
+    always @(posedge clk_pix) begin
+        draw_start <= 0;
+        case (state)
+            CLEAR: begin
+                if (fb_addr_clr != FB_PIXELS-1) begin
+                    fb_addr_clr <= fb_addr_clr + 1;
+                end else begin
+                    state <= INIT;
+                    fb_we_clr <= 0;
+                end
+            end
+            INIT: begin  // register coordinates and colour
+                draw_start <= 1;
+                state <= DRAW;
+                rx0 <= q1x;
+                ry0 <= q1y;
+                rx1 <= q1x + Q1_SIZE;
+                ry1 <= q1y + Q1_SIZE;
+                fb_cidx_draw <= 4'hB;  // green
+            end
+            DRAW: if (draw_done) state <= DONE;
+            DONE: state <= IDLE;
+            default: if (vbi) begin  // IDLE
+                state <= CLEAR;
+                fb_we_clr <= 1;
+                fb_addr_clr <= 0;
+            end
+        endcase
+    end
+    
+    // framebuffer 0
+    logic fb0_we;
+    logic [FB_ADDRW-1:0] fb0_addr_read;
+    logic [FB_DATAW-1:0] fb0_cidx_read, fb0_cidx_read_1;
 
     bram_sdp #(
         .WIDTH(FB_DATAW),
         .DEPTH(FB_PIXELS),
         .INIT_F(FB_IMAGE)
-    ) fb_inst (
+    ) fb0_inst (
         .clk_write(clk_pix),
         .clk_read(clk_pix),
-        .we(fb_we),
+        .we(fb0_we),
         .addr_write(fb_addr_write),
-        .addr_read(fb_addr_read),
+        .addr_read(fb0_addr_read),
         .data_in(fb_cidx_write),
-        .data_out(fb_cidx_read_1)
+        .data_out(fb0_cidx_read_1)
     );
 
-    // draw shapes in framebuffer
-    localparam SHAPE_CNT=15;
-    logic [3:0] shape_id;  // shape identifier
-    logic [FB_CORDW-1:0] rx0, ry0, rx1, ry1;  // rectangle coords
-    logic [FB_CORDW-1:0] px, py;  // triangle pixel drawing coordinates
-    logic draw_start, drawing, draw_done;  // draw_line signals
+    // framebuffer 1
+    logic fb1_we;
+    logic [FB_ADDRW-1:0] fb1_addr_read;
+    logic [FB_DATAW-1:0] fb1_cidx_read, fb1_cidx_read_1;
 
-    // draw state machine
-    enum {IDLE, INIT, DRAW, DONE} state;
-    initial state = IDLE;  // needed for Yosys
-    always @(posedge clk_pix) begin
-        draw_start <= 0;
-        case (state)
-            INIT: begin  // register coordinates and colour
-                draw_start <= 1;
-                state <= DRAW;
-                /* verilator lint_off WIDTH */
-                rx0 <= 80 + 4 * shape_id;
-                ry0 <= 60 + 4 * shape_id;
-                rx1 <= 160 + 4 * shape_id;
-                ry1 <= 140 + 4 * shape_id;
-                /* verilator lint_on WIDTH */
-                fb_cidx_write <= shape_id + 1;  // skip 1st colour: black
-            end
-            DRAW: if (draw_done) begin
-                if (shape_id == SHAPE_CNT-1) begin
-                    state <= DONE;
-                end else begin
-                    shape_id <= shape_id + 1;
-                    state <= INIT;
-                end
-            end
-            DONE: state <= DONE;
-            default: if (vbi) state <= INIT;  // IDLE
-        endcase
+    bram_sdp #(
+        .WIDTH(FB_DATAW),
+        .DEPTH(FB_PIXELS),
+        .INIT_F(FB_IMAGE)
+    ) fb1_inst (
+        .clk_write(clk_pix),
+        .clk_read(clk_pix),
+        .we(fb1_we),
+        .addr_write(fb_addr_write),
+        .addr_read(fb1_addr_read),
+        .data_in(fb_cidx_write),
+        .data_out(fb1_cidx_read_1)
+    );
+
+    logic fb_draw;  // which buffer to draw in; swap every frame
+    always @(posedge clk_pix) if (vbi) fb_draw <= ~fb_draw;
+
+    // switch between clearing and drawing screen
+    always_comb begin
+        fb_we = (state == CLEAR) ? fb_we_clr : fb_we_draw;
+        fb_addr_write = (state == CLEAR) ? fb_addr_clr : fb_addr_draw;
+        fb_cidx_write = (state == CLEAR) ? 0 : fb_cidx_draw;
     end
 
-    draw_rectangle_fill #(.CORDW(FB_CORDW)) draw_rectangle_inst (
+    // switch between framebuffers
+    always_comb begin
+        // write enable
+        fb0_we = fb_draw ? 0 : fb_we;
+        fb1_we = fb_draw ? fb_we : 0;
+        // read address
+        fb0_addr_read  = fb_draw ? fb_addr_disp : fb_addr_read;
+        fb1_addr_read  = fb_draw ? fb_addr_read : fb_addr_disp;
+        // pixel colour
+        fb_cidx_read = fb_draw ? fb1_cidx_read : fb0_cidx_read;
+        fb_cidx_disp = fb_draw ? fb0_cidx_read : fb1_cidx_read;
+    end
+
+    draw_rectangle #(.CORDW(FB_CORDW)) draw_rectangle_inst (
         .clk(clk_pix),
         .rst(!clk_locked),
         .start(draw_start),
@@ -131,7 +209,7 @@ module top_rectangles_fill (
     );
 
     // pixel coordinate to memory address calculation takes one cycle
-    always_ff @(posedge clk_pix) fb_we <= drawing;
+    always_ff @(posedge clk_pix) fb_we_draw <= drawing;
 
     pix_addr #(
         .CORDW(FB_CORDW),
@@ -141,7 +219,7 @@ module top_rectangles_fill (
         .hres(FB_WIDTH),
         .px,
         .py,
-        .pix_addr(fb_addr_write)
+        .pix_addr(fb_addr_draw)
     );
 
     // linebuffer (LB)
@@ -157,12 +235,12 @@ module top_rectangles_fill (
     logic lb_data_req;  // LB requesting data
     logic [$clog2(LB_LEN+1)-1:0] cnt_h;  // count pixels in line to read
     always_ff @(posedge clk_pix) begin
-        if (vbi) fb_addr_read <= 0;   // new frame
+        if (vbi) fb_addr_disp <= 0;   // new frame
         if (lb_data_req && sy != V_RES-1) begin  // load next line of data...
             cnt_h <= 0;                          // ...if not on last line
         end else if (cnt_h < LB_LEN) begin  // advance to start of next line
             cnt_h <= cnt_h + 1;
-            fb_addr_read <= fb_addr_read == FB_PIXELS-1 ? 0 : fb_addr_read + 1;
+            fb_addr_disp <= fb_addr_disp == FB_PIXELS-1 ? 0 : fb_addr_disp + 1;
         end
     end
 
@@ -199,7 +277,8 @@ module top_rectangles_fill (
 
     // improve timing with register between BRAM and async ROM
     always @(posedge clk_pix) begin
-        fb_cidx_read <= fb_cidx_read_1;
+        fb0_cidx_read <= fb0_cidx_read_1;
+        fb1_cidx_read <= fb1_cidx_read_1;
     end
 
     // colour lookup table (ROM) 16x12-bit entries
@@ -209,7 +288,7 @@ module top_rectangles_fill (
         .DEPTH(16),
         .INIT_F(FB_PALETTE)
     ) clut (
-        .addr(fb_cidx_read),
+        .addr(fb_cidx_disp),
         .data(clut_colr)
     );
 
