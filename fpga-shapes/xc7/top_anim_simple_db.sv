@@ -1,11 +1,11 @@
-// Project F: FPGA Shapes - Top Double-Buffer Animation (Arty with Pmod VGA)
+// Project F: FPGA Shapes - Top Simple Animation (Arty with Pmod VGA)
 // (C)2021 Will Green, open source hardware released under the MIT License
 // Learn more at https://projectf.io
 
 `default_nettype none
 `timescale 1ns / 1ps
 
-module top_anim_db (
+module top_anim_simple_db (
     input  wire logic clk_100m,     // 100 MHz clock
     input  wire logic btn_rst,      // reset button (active low)
     output      logic vga_hsync,    // horizontal sync
@@ -57,7 +57,7 @@ module top_anim_db (
     localparam FB_ADDRW   = $clog2(FB_PIXELS);
     localparam FB_DATAW   = 4;  // colour bits per pixel
     localparam FB_IMAGE   = "";
-    localparam FB_PALETTE = "tunnel_4bit_palette.mem";
+    localparam FB_PALETTE = "16_colr_4bit_palette.mem";
 
     // framebuffer multiplexing signals: drawing
     logic fb_we, fb_we_draw, fb_we_clr;
@@ -73,33 +73,35 @@ module top_anim_db (
     logic [FB_ADDRW-1:0] fb_addr_disp;
     logic [FB_DATAW-1:0] fb_cidx_disp;
 
-    // tunnel coordinates
-
-
-    // draw shapes in framebuffer
-    localparam SHAPE_CNT=7;
-    logic [3:0] shape_id;  // shape identifier
-    logic [FB_CORDW-1:0] dx0, dy0, dx1, dy1;  // draw coords
-    logic [FB_CORDW-1:0] px, py;  // shape pixel drawing coordinates
-    logic draw_start, drawing, draw_done;  // draw_line signals
-
-    // animation steps
-    localparam ANIM_CNT=5;  // five frames in animation
-    localparam ANIM_SPEED=6;  // 6 display frames per animation step 10fps
-    logic [$clog2(ANIM_CNT)-1:0] cnt_anim;
-    logic [$clog2(ANIM_SPEED)-1:0] cnt_anim_speed;
-    logic [FB_DATAW-1:0] colr_offs;  // colour offset
-    always @(posedge clk_pix) begin
+    // square coordinates
+    localparam Q1_SIZE = 80;
+    logic [FB_CORDW-1:0] q1x, q1y;  // position (top left)
+    logic q1dx, q1dy;               // direction: 0 is right/down
+    logic [FB_CORDW-1:0] q1s = 1;   // speed in pixels/frame
+    always_ff @(posedge clk_pix) begin
         if (vbi) begin
-            if (cnt_anim_speed == ANIM_SPEED-1) begin
-                if (cnt_anim == ANIM_CNT-1) begin
-                    cnt_anim <= 0;
-                    colr_offs <= colr_offs + 1;
-                end else cnt_anim <= cnt_anim + 1;
-                cnt_anim_speed <= 0;
-            end else cnt_anim_speed <= cnt_anim_speed + 1;
+            if (q1x >= FB_WIDTH - (Q1_SIZE + q1s)) begin  // right edge
+                q1dx <= 1;
+                q1x <= q1x - q1s;
+            end else if (q1x < q1s) begin  // left edge
+                q1dx <= 0;
+                q1x <= q1x + q1s;
+            end else q1x <= (q1dx) ? q1x - q1s : q1x + q1s;
+
+            if (q1y >= FB_HEIGHT - (Q1_SIZE + q1s)) begin  // bottom edge
+                q1dy <= 1;
+                q1y <= q1y - q1s;
+            end else if (q1y < q1s) begin  // top edge
+                q1dy <= 0;
+                q1y <= q1y + q1s;
+            end else q1y <= (q1dy) ? q1y - q1s : q1y + q1s;
         end
     end
+
+    // draw shapes in framebuffer
+    logic [FB_CORDW-1:0] rx0, ry0, rx1, ry1;  // rectangle coords
+    logic [FB_CORDW-1:0] px, py;  // shape pixel drawing coordinates
+    logic draw_start, drawing, draw_done;  // draw_line signals
 
     // draw state machine
     enum {IDLE, INIT, CLEAR, DRAW, DONE} state;
@@ -118,73 +120,16 @@ module top_anim_db (
             INIT: begin  // register coordinates and colour
                 draw_start <= 1;
                 state <= DRAW;
-                case (shape_id)
-                    4'd0: begin
-                        dx0 <=  40; dy0 <=   0;
-                        dx1 <= 279; dy1 <= 239;
-                        fb_cidx_draw <= colr_offs;
-                    end
-                    4'd1: begin  // 8 pixels per anim step
-                        dx0 <=  80 - cnt_anim * 8; 
-                        dy0 <=  40 - cnt_anim * 8;
-                        dx1 <= 239 + cnt_anim * 8; 
-                        dy1 <= 199 + cnt_anim * 8;
-                        fb_cidx_draw <= colr_offs + 1;
-                    end
-                    4'd2: begin  // 5 pixels per anim step
-                        dx0 <= 105 - cnt_anim * 5;
-                        dy0 <=  65 - cnt_anim * 5;
-                        dx1 <= 214 + cnt_anim * 5; 
-                        dy1 <= 174 + cnt_anim * 5;
-                        fb_cidx_draw <= colr_offs + 2;
-                    end
-                    4'd3: begin  // 4 pixels per anim step
-                        dx0 <= 125 - cnt_anim * 4; 
-                        dy0 <=  85 - cnt_anim * 4;
-                        dx1 <= 194 + cnt_anim * 4; 
-                        dy1 <= 154 + cnt_anim * 4;
-                        fb_cidx_draw <= colr_offs + 3;
-                    end
-                    4'd4: begin  // 3 pixels per anim step
-                        dx0 <= 140 - cnt_anim * 3; 
-                        dy0 <= 100 - cnt_anim * 3;
-                        dx1 <= 179 + cnt_anim * 3; 
-                        dy1 <= 139 + cnt_anim * 3;
-                        fb_cidx_draw <= colr_offs + 4;
-                    end
-                    4'd5: begin  // 2 pixels per anim step
-                        dx0 <= 150 - cnt_anim * 2; 
-                        dy0 <= 110 - cnt_anim * 2;
-                        dx1 <= 169 + cnt_anim * 2; 
-                        dy1 <= 129 + cnt_anim * 2;
-                        fb_cidx_draw <= colr_offs + 5;
-                    end
-                    4'd6: begin  // 1 pixel per anim step
-                        dx0 <= 155 - cnt_anim * 1; 
-                        dy0 <= 115 - cnt_anim * 1;
-                        dx1 <= 164 + cnt_anim * 1; 
-                        dy1 <= 124 + cnt_anim * 1;
-                        fb_cidx_draw <= colr_offs + 6;
-                    end
-                    default: begin  // should never occur
-                        dx0 <=  10; dy0 <=  10;
-                        dx1 <=  20; dy1 <=  20;
-                        fb_cidx_draw <= 4'h7;  // white
-                    end
-                endcase
+                rx0 <= q1x;
+                ry0 <= q1y;
+                rx1 <= q1x + Q1_SIZE;
+                ry1 <= q1y + Q1_SIZE;
+                fb_cidx_draw <= 4'hB;  // green
             end
-            DRAW: if (draw_done) begin
-                if (shape_id == SHAPE_CNT-1) begin
-                    state <= DONE;
-                end else begin
-                    shape_id <= shape_id + 1;
-                    state <= INIT;
-                end
-            end            
+            DRAW: if (draw_done) state <= DONE;
             DONE: state <= IDLE;
             default: if (vbi) begin  // IDLE
                 state <= CLEAR;
-                shape_id <= 0;
                 fb_we_clr <= 1;
                 fb_addr_clr <= 0;
             end
@@ -233,11 +178,10 @@ module top_anim_db (
     always @(posedge clk_pix) if (vbi) fb_draw <= ~fb_draw;
 
     // switch between clearing and drawing screen
-    // clear colour is currently hard-coded to the offet colour
     always_comb begin
         fb_we = (state == CLEAR) ? fb_we_clr : fb_we_draw;
         fb_addr_write = (state == CLEAR) ? fb_addr_clr : fb_addr_draw;
-        fb_cidx_write = (state == CLEAR) ? colr_offs : fb_cidx_draw;
+        fb_cidx_write = (state == CLEAR) ? 0 : fb_cidx_draw;
     end
 
     // switch between framebuffers
@@ -253,15 +197,15 @@ module top_anim_db (
         fb_cidx_disp = fb_draw ? fb0_cidx_read : fb1_cidx_read;
     end
 
-    draw_rectangle_fill #(.CORDW(FB_CORDW)) draw_rectangle_inst (
+    draw_rectangle #(.CORDW(FB_CORDW)) draw_rectangle_inst (
         .clk(clk_pix),
         .rst(!clk_locked),
         .start(draw_start),
         .oe(1'b1),
-        .x0(dx0),
-        .y0(dy0),
-        .x1(dx1),
-        .y1(dy1),
+        .x0(rx0),
+        .y0(ry0),
+        .x1(rx1),
+        .y1(ry1),
         .x(px),
         .y(py),
         .drawing,
