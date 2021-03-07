@@ -20,7 +20,7 @@ module draw_line #(parameter CORDW=10) (  // FB coord width in bits
     output      logic done             // line complete (high for one tick)
     );
 
-    // "constant" signals
+    // "constant" signals (we register these during the INIT state)
     logic signed [CORDW:0] dx, dx_c, dy, dy_c;  // a bit wider as signed
     logic right, right_c, down, down_c;  // drawing direction
     always_comb begin
