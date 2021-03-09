@@ -57,7 +57,7 @@ module top_anim_db (
     localparam FB_ADDRW   = $clog2(FB_PIXELS);
     localparam FB_DATAW   = 4;  // colour bits per pixel
     localparam FB_IMAGE   = "";
-    localparam FB_PALETTE = "tunnel_4bit_palette.mem";
+    localparam FB_PALETTE = "tunnel_16_colr_4bit_palette.mem";
 
     // framebuffer multiplexing signals: drawing
     logic fb_we, fb_we_draw, fb_we_clr;
